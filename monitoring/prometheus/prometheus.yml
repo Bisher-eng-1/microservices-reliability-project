@@ -1,0 +1,53 @@
+# Prometheus Scrape Configuration for Microservices Reliability Project
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+  scrape_timeout: 4s
+
+scrape_configs:
+  # 1. API Gateway Service Application Metrics
+  - job_name: "api-gateway"
+    metrics_path: "/metrics"
+    static_configs:
+      - targets: ["api-gateway:8000"]
+        labels:
+          tier: "gateway"
+          env: "local-compose"
+
+  # 2. Frontend Service Application Metrics
+  - job_name: "frontend-service"
+    metrics_path: "/metrics"
+    static_configs:
+      - targets: ["frontend-service:8080"]
+        labels:
+          tier: "presentation"
+          env: "local-compose"
+
+  # 3. Backend Worker Service Application Metrics
+  - job_name: "backend-worker"
+    metrics_path: "/metrics"
+    static_configs:
+      - targets: ["backend-worker:8001"]
+        labels:
+          tier: "worker"
+          env: "local-compose"
+
+  # 4. Data Cache Store Service Application Metrics
+  - job_name: "data-cache-store"
+    metrics_path: "/metrics"
+    static_configs:
+      - targets: ["data-cache-store:8002"]
+        labels:
+          tier: "cache"
+          env: "local-compose"
+
+  # 5. Infrastructure Container Observability: cAdvisor
+  # NOTE: cAdvisor collects kernel/cgroup metrics (CPU seconds, memory working set, network I/O)
+  # for all running containers. This separates application metrics from container resource metrics.
+  - job_name: "cadvisor"
+    metrics_path: "/metrics"
+    static_configs:
+      - targets: ["cadvisor:8080"]
+        labels:
+          tier: "infrastructure"
+          env: "local-compose"

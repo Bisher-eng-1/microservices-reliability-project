@@ -1,0 +1,166 @@
+services:
+  # ============================================================================
+  # SERVICE 1: DATA CACHE STORE (Service D)
+  # In-memory key-value cache with TTL expiration and Prometheus metrics
+  # ============================================================================
+  data-cache-store:
+    build:
+      context: .
+      dockerfile: services/data_cache_store/Dockerfile
+    container_name: data-cache-store
+    hostname: data-cache-store
+    ports:
+      - "8002:8002"
+    environment:
+      - PORT=8002
+      - HOST=0.0.0.0
+      - DEFAULT_TTL_SECONDS=180
+    networks:
+      - microservices-net
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8002/health', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 3s
+    restart: unless-stopped
+
+  # ============================================================================
+  # SERVICE 2: BACKEND WORKER (Service C)
+  # Asynchronous background compute pipeline with cache lookup and TTL caching
+  # ============================================================================
+  backend-worker:
+    build:
+      context: .
+      dockerfile: services/backend_worker/Dockerfile
+    container_name: backend-worker
+    hostname: backend-worker
+    ports:
+      - "8001:8001"
+    environment:
+      - PORT=8001
+      - HOST=0.0.0.0
+      - CACHE_STORE_URL=http://data-cache-store:8002
+      - CACHE_TIMEOUT_SECONDS=2.0
+      - WORKER_CONCURRENCY=4
+      - JOB_CACHE_TTL_SECONDS=180
+    depends_on:
+      data-cache-store:
+        condition: service_healthy
+    networks:
+      - microservices-net
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 3s
+    restart: unless-stopped
+
+  # ============================================================================
+  # SERVICE 3: API GATEWAY (Service A)
+  # Public entry point, request validation, circuit breaker, downstream routing
+  # ============================================================================
+  api-gateway:
+    build:
+      context: .
+      dockerfile: services/api_gateway/Dockerfile
+    container_name: api-gateway
+    hostname: api-gateway
+    ports:
+      - "8000:8000"
+    environment:
+      - PORT=8000
+      - HOST=0.0.0.0
+      - WORKER_SERVICE_URL=http://backend-worker:8001
+      - CACHE_SERVICE_URL=http://data-cache-store:8002
+      - DOWNSTREAM_TIMEOUT_SECONDS=3.0
+    depends_on:
+      backend-worker:
+        condition: service_healthy
+      data-cache-store:
+        condition: service_healthy
+    networks:
+      - microservices-net
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 3s
+    restart: unless-stopped
+
+  # ============================================================================
+  # SERVICE 4: FRONTEND SERVICE (Service B)
+  # Presentation dashboard communicating with backend through API Gateway
+  # ============================================================================
+  frontend-service:
+    build:
+      context: .
+      dockerfile: services/frontend_service/Dockerfile
+    container_name: frontend-service
+    hostname: frontend-service
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+      - HOST=0.0.0.0
+      - GATEWAY_URL=http://api-gateway:8000
+      - GATEWAY_TIMEOUT_SECONDS=3.0
+    depends_on:
+      api-gateway:
+        condition: service_healthy
+    networks:
+      - microservices-net
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 3s
+    restart: unless-stopped
+
+  # ============================================================================
+  # OBSERVABILITY INFRASTRUCTURE (Not Application Services)
+  # Prometheus Scraper + cAdvisor Container Resource Metrics
+  # ============================================================================
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=24h"
+    depends_on:
+      api-gateway:
+        condition: service_healthy
+      frontend-service:
+        condition: service_healthy
+    networks:
+      - microservices-net
+    restart: unless-stopped
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    container_name: cadvisor
+    ports:
+      - "8085:8080"
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    privileged: true
+    devices:
+      - /dev/kmsg
+    networks:
+      - microservices-net
+    restart: unless-stopped
+
+networks:
+  microservices-net:
+    driver: bridge

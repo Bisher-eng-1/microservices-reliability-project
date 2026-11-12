@@ -1,0 +1,107 @@
+name: Microservices Reliability CI
+
+on:
+  push:
+    branches: ["main", "master"]
+  pull_request:
+    branches: ["main", "master"]
+
+jobs:
+  test-and-lint:
+    name: Code Quality & Integration Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Verify Python Syntax & Bytecode Compilation
+        run: |
+          python -m compileall services tests
+
+      - name: Lint Code with Flake8
+        run: |
+          # Stop the build if there are Python syntax errors or undefined names
+          flake8 services tests --count --select=E9,F63,F7,F82 --show-source --statistics
+          # Exit-zero treats all errors as warnings. Max line length 120
+          flake8 services tests --count --exit-zero --max-complexity=15 --max-line-length=120 --statistics
+
+      - name: Run Automated Integration & Reliability Test Suite
+        run: |
+          pytest -v tests/
+
+  docker-verification:
+    name: Docker Validation & Container Builds
+    runs-on: ubuntu-latest
+    needs: test-and-lint
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Validate Docker Compose Configuration
+        run: |
+          docker compose config --quiet
+          echo "docker-compose.yml configuration syntax validated successfully."
+
+      - name: Build Service D - data-cache-store
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: services/data_cache_store/Dockerfile
+          push: false
+          tags: microservices-reliability/data-cache-store:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build Service C - backend-worker
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: services/backend_worker/Dockerfile
+          push: false
+          tags: microservices-reliability/backend-worker:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build Service A - api-gateway
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: services/api_gateway/Dockerfile
+          push: false
+          tags: microservices-reliability/api-gateway:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build Service B - frontend-service
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: services/frontend_service/Dockerfile
+          push: false
+          tags: microservices-reliability/frontend-service:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Verify Compose Stack Startup & Health (Docker In Docker)
+        run: |
+          docker compose up -d --build
+          echo "Waiting for health checks to pass..."
+          timeout 60 bash -c 'until docker compose ps | grep -q "healthy"; do sleep 2; done'
+          docker compose ps
+          docker compose down
